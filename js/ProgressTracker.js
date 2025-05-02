@@ -5,9 +5,9 @@ class ProgressTracker {
     this.watchedIntervals = [];
     this.currentInterval = null;
     this.videoDuration = 0;
-    this.lastUpdateTime = 0;
-    this.uiUpdateInterval = null;
+    this.lastPosition = 0;
     this.isSeeking = false;
+    this.uiUpdateInterval = null;
 
     this.loadProgress();
     this.setupEventListeners();
@@ -20,11 +20,8 @@ class ProgressTracker {
       this.watchedIntervals = intervals || [];
       this.videoDuration = duration || 0;
       this.video.currentTime = currentTime || 0;
+      this.lastPosition = currentTime || 0;
       this.updateUI();
-    }
-
-    if (!this.videoDuration && this.video.duration) {
-      this.videoDuration = this.video.duration;
     }
   }
 
@@ -44,51 +41,59 @@ class ProgressTracker {
     });
 
     this.video.addEventListener("play", () => {
-      // Only start new interval if not in already watched portion
-      if (!this.isInWatchedPortion(this.video.currentTime)) {
-        this.startNewInterval();
-      }
+      this.checkAndStartNewInterval();
       this.startUIUpdates();
     });
 
     this.video.addEventListener("pause", () => {
-      this.endCurrentInterval();
+      this.finalizeCurrentInterval();
       this.stopUIUpdates();
       this.saveProgress();
     });
 
     this.video.addEventListener("seeking", () => {
       this.isSeeking = true;
-      this.endCurrentInterval();
-      this.stopUIUpdates();
+      this.finalizeCurrentInterval();
     });
 
     this.video.addEventListener("seeked", () => {
       this.isSeeking = false;
-      // Only start new interval if not in already watched portion
-      if (
-        !this.video.paused &&
-        !this.isInWatchedPortion(this.video.currentTime)
-      ) {
-        this.startNewInterval();
-      }
-      if (!this.video.paused) {
-        this.startUIUpdates();
-      }
+      this.checkAndStartNewInterval();
+      if (!this.video.paused) this.startUIUpdates();
     });
 
     this.video.addEventListener("timeupdate", () => {
-      // If we enter watched portion during playback, end current interval
-      if (
-        this.currentInterval &&
-        this.isInWatchedPortion(this.video.currentTime)
-      ) {
-        this.endCurrentInterval();
+      const currentTime = this.video.currentTime;
+
+      // Update current interval if exists
+      if (this.currentInterval) {
+        this.currentInterval.end = currentTime;
       }
+
+      // Check if we moved backward into watched portion
+      if (currentTime < this.lastPosition) {
+        if (this.isTimeWatched(currentTime)) {
+          this.finalizeCurrentInterval();
+        } else {
+          this.checkAndStartNewInterval();
+        }
+      }
+
+      // Check if we entered unwatched territory while playing
+      if (
+        !this.currentInterval &&
+        !this.isTimeWatched(currentTime) &&
+        !this.video.paused
+      ) {
+        this.startNewInterval(currentTime);
+      }
+
+      this.lastPosition = currentTime;
+      this.updateUI();
     });
 
     this.video.addEventListener("ended", () => {
-      this.endCurrentInterval();
+      this.finalizeCurrentInterval();
       this.stopUIUpdates();
       this.saveProgress();
     });
@@ -98,41 +103,40 @@ class ProgressTracker {
     });
   }
 
-  isInWatchedPortion(time) {
+  isTimeWatched(time) {
     return this.watchedIntervals.some(
       ([start, end]) => time >= start && time <= end
     );
   }
 
-  startUIUpdates() {
-    this.stopUIUpdates();
-    this.uiUpdateInterval = setInterval(() => this.updateUI(), 100);
-  }
-
-  stopUIUpdates() {
-    if (this.uiUpdateInterval) {
-      clearInterval(this.uiUpdateInterval);
-      this.uiUpdateInterval = null;
-    }
-  }
-
-  startNewInterval() {
+  checkAndStartNewInterval() {
+    const currentTime = this.video.currentTime;
     if (
       !this.currentInterval &&
-      !this.isInWatchedPortion(this.video.currentTime)
+      !this.isTimeWatched(currentTime) &&
+      !this.isSeeking &&
+      !this.video.paused
     ) {
-      this.currentInterval = {
-        start: this.video.currentTime,
-        end: this.video.currentTime,
-      };
+      this.startNewInterval(currentTime);
     }
   }
 
-  endCurrentInterval() {
+  startNewInterval(startTime) {
+    this.currentInterval = {
+      start: startTime,
+      end: startTime,
+    };
+  }
+
+  finalizeCurrentInterval() {
     if (this.currentInterval) {
       this.currentInterval.end = this.video.currentTime;
 
-      if (this.currentInterval.end - this.currentInterval.start >= 0.5) {
+      // Only add if interval is meaningful (≥0.5 seconds) and not in watched portion
+      if (
+        this.currentInterval.end - this.currentInterval.start >= 0.5 &&
+        !this.isTimeWatched(this.currentInterval.start)
+      ) {
         this.addWatchedInterval(
           this.currentInterval.start,
           this.currentInterval.end
@@ -141,6 +145,16 @@ class ProgressTracker {
 
       this.currentInterval = null;
     }
+  }
+
+  startUIUpdates() {
+    this.stopUIUpdates();
+    this.uiUpdateInterval = setInterval(() => this.updateUI(), 100);
+  }
+
+  stopUIUpdates() {
+    clearInterval(this.uiUpdateInterval);
+    this.uiUpdateInterval = null;
   }
 
   addWatchedInterval(start, end) {
@@ -174,9 +188,13 @@ class ProgressTracker {
       0
     );
 
-    // Add current playback time if watching new content
-    if (this.currentInterval && !this.video.paused && !this.isSeeking) {
-      total += this.video.currentTime - this.currentInterval.start;
+    // Add current interval if it's valid new content
+    if (
+      this.currentInterval &&
+      !this.isTimeWatched(this.currentInterval.start) &&
+      this.currentInterval.end - this.currentInterval.start >= 0
+    ) {
+      total += this.currentInterval.end - this.currentInterval.start;
     }
 
     return total;
@@ -184,8 +202,10 @@ class ProgressTracker {
 
   calculateProgress() {
     if (!this.videoDuration) return 0;
-    const watched = this.getTotalWatchedTime();
-    return Math.min(100, (watched / this.videoDuration) * 100);
+    return Math.min(
+      100,
+      (this.getTotalWatchedTime() / this.videoDuration) * 100
+    );
   }
 
   updateUI() {
