@@ -210,3 +210,7 @@ To test from a fresh state:
 - Click the **Reset Progress** button
 - All watched data is cleared
 - Video jumps back to time `0`
+
+---
+
+### 📥 Live Demo: https://real-progress-tracker.netlify.app/
