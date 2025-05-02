@@ -1,4 +1,4 @@
-# **Video Progress Tracker Documentation**
+# 📺 Video Progress Tracker
 
 ## **📌 Overview**
 
@@ -47,44 +47,166 @@ video-progress-tracker/
 
 - **Video Player** – HTML5 `<video>` with controls.
 - **Progress Bar** – Visual indicator of watched percentage.
-- **Reset Button** – Clears all progress.
+- **Reset Button** – Clears all progress for testing.
 
 ---
 
-## **⚙️ Advanced Functionality**
+## 🧱 Detailed Breakdown (by file)
 
-### **1. How Progress is Tracked**
+### 📄 `index.html` – Structure & Components
 
-- **`watchedIntervals`** stores arrays of `[startTime, endTime]`.
-- **`currentInterval`** tracks the currently playing segment.
-- **`isTimeWatched(time)`** checks if a timestamp was already viewed.
+Defines the core layout and elements:
 
-### **2. Smart Interval Handling**
+- `<video id="lectureVideo">` – HTML5 video player.
+- `.progress-container` – Contains:
 
-- **New Interval Starts** when:
-  - Playback begins in an **unwatched** section.
-  - Seeking forward to an **unwatched** part.
-- **Interval Stops** when:
-  - Pausing/seeking backward into a **watched** section.
-  - Video ends.
+  - `.progress-bar` – Outer bar
+  - `.progress-fill` – Animated inner bar
+  - `#progressText` – Shows percentage watched
 
-### **3. Real-Time UI Updates**
+- `#resetBtn` – Resets progress and video state.
+- Scripts:
 
-- **`timeupdate` Event** triggers progress bar updates (~10fps).
-- **`getTotalWatchedTime()`** calculates:
-  ```javascript
-  totalWatched = watchedIntervals + (currentInterval if active)
+  ```html
+  <script src="js/ProgressTracker.js"></script>
+  <script src="js/main.js"></script>
   ```
-- **Smooth Transitions** with CSS (`transition: width 0.2s ease`).
 
 ---
 
-## **🔧 Edge Cases Handled**
+### 🎨 `style.css` – Styling & Theming
 
-| Scenario             | Behavior                           |
-| -------------------- | ---------------------------------- |
-| **Seeking Forward**  | Starts new interval if unwatched.  |
-| **Seeking Backward** | Stops tracking if rewatching.      |
-| **Pausing**          | Saves progress immediately.        |
-| **Resuming**         | Continues tracking if new content. |
-| **Video End**        | Finalizes interval and saves.      |
+- **Dark UI Theme** using CSS custom properties (`--dark-bg`, `--dark-text`, etc.)
+- **Responsive Design** with media queries for tablets/mobile.
+- **Smooth Progress Animation** via:
+
+  ```css
+  .progress-fill {
+    transition: width 0.3s ease;
+  }
+  ```
+
+- **Clean, modern button & layout styles** with hover/focus states.
+
+---
+
+### 🧠 `ProgressTracker.js` – Core Tracking Logic
+
+The `ProgressTracker` class implements full logic for:
+
+#### 📌 Initialization
+
+```javascript
+constructor(videoId, (storageKey = "videoProgress"));
+```
+
+- Grabs the video element by ID
+- Loads any stored progress
+- Sets up event listeners
+
+#### 💾 Load/Save Progress
+
+```js
+loadProgress();
+saveProgress();
+```
+
+- Saves `intervals`, `duration`, and `currentTime` to `localStorage`
+- Restores them when the page is reloaded
+
+#### 📺 Watching Detection
+
+- **Start a New Interval** when playing forward into unseen sections:
+
+  ```js
+  handlePlayStart();
+  handleSeeked();
+  ```
+
+- **Track Time Updates**:
+
+  ```js
+  handleTimeUpdate();
+  ```
+
+  - If playback is smooth and forward, current interval's `end` is extended.
+
+- **Stop Interval** on:
+
+  - Pause
+  - Seek backward
+  - Video end
+
+  ```js
+  finalizeCurrentInterval();
+  ```
+
+#### 📊 Real-Time UI Update
+
+```js
+updateUI();
+```
+
+- Calculates:
+
+  ```js
+  progress = (watchedTime / videoDuration) * 100;
+  ```
+
+- Updates:
+
+  - `#progressFill` width
+  - `#progressText` content
+
+#### 🧠 Interval Merging
+
+```js
+mergeIntervals(intervals);
+```
+
+- Merges overlapping intervals to avoid double-counting.
+
+#### ♻️ Reset
+
+```js
+resetProgress();
+```
+
+- Clears intervals
+- Resets UI
+- Resets video time to 0
+
+---
+
+### 🧩 `main.js` – App Entry Point
+
+```js
+document.addEventListener("DOMContentLoaded", () => {
+  const tracker = new ProgressTracker("lectureVideo");
+});
+```
+
+- Instantiates `ProgressTracker` once DOM is loaded.
+
+---
+
+## ⚙️ Edge Cases & Behaviors
+
+| **Scenario**             | **Behavior**                               |
+| ------------------------ | ------------------------------------------ |
+| Seek forward (unwatched) | Starts a new watched interval              |
+| Seek backward (watched)  | Pauses tracking for rewatched segments     |
+| Pause                    | Finalizes the current interval             |
+| Resume                   | Only resumes tracking if segment is unseen |
+| End of Video             | Finalizes and saves progress               |
+| Reload Page              | Restores progress from `localStorage`      |
+
+---
+
+## 🧪 Resetting & Testing
+
+To test from a fresh state:
+
+- Click the **Reset Progress** button
+- All watched data is cleared
+- Video jumps back to time `0`
