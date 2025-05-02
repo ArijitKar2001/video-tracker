@@ -8,6 +8,8 @@ class ProgressTracker {
     this.lastPosition = 0;
     this.isSeeking = false;
     this.uiUpdateInterval = null;
+    this.lastValidTime = 0;
+    this.minIntervalDuration = 0.5; // seconds
 
     this.loadProgress();
     this.setupEventListeners();
@@ -16,12 +18,17 @@ class ProgressTracker {
   loadProgress() {
     const savedData = localStorage.getItem(this.storageKey);
     if (savedData) {
-      const { intervals, duration, currentTime } = JSON.parse(savedData);
-      this.watchedIntervals = intervals || [];
-      this.videoDuration = duration || 0;
-      this.video.currentTime = currentTime || 0;
-      this.lastPosition = currentTime || 0;
-      this.updateUI();
+      try {
+        const { intervals, duration, currentTime } = JSON.parse(savedData);
+        this.watchedIntervals = this.mergeIntervals(intervals || []);
+        this.videoDuration = duration || 0;
+        this.video.currentTime = currentTime || 0;
+        this.lastPosition = currentTime || 0;
+        this.lastValidTime = currentTime || 0;
+        this.updateUI();
+      } catch (e) {
+        console.error("Failed to load progress:", e);
+      }
     }
   }
 
@@ -41,7 +48,7 @@ class ProgressTracker {
     });
 
     this.video.addEventListener("play", () => {
-      this.checkAndStartNewInterval();
+      this.handlePlayStart();
       this.startUIUpdates();
     });
 
@@ -58,38 +65,13 @@ class ProgressTracker {
 
     this.video.addEventListener("seeked", () => {
       this.isSeeking = false;
-      this.checkAndStartNewInterval();
+      this.handleSeeked();
       if (!this.video.paused) this.startUIUpdates();
     });
 
     this.video.addEventListener("timeupdate", () => {
-      const currentTime = this.video.currentTime;
-
-      // Update current interval if exists
-      if (this.currentInterval) {
-        this.currentInterval.end = currentTime;
-      }
-
-      // Check if we moved backward into watched portion
-      if (currentTime < this.lastPosition) {
-        if (this.isTimeWatched(currentTime)) {
-          this.finalizeCurrentInterval();
-        } else {
-          this.checkAndStartNewInterval();
-        }
-      }
-
-      // Check if we entered unwatched territory while playing
-      if (
-        !this.currentInterval &&
-        !this.isTimeWatched(currentTime) &&
-        !this.video.paused
-      ) {
-        this.startNewInterval(currentTime);
-      }
-
-      this.lastPosition = currentTime;
-      this.updateUI();
+      this.handleTimeUpdate();
+      this.updateUI(); // Always update UI on timeupdate for real-time feedback
     });
 
     this.video.addEventListener("ended", () => {
@@ -109,19 +91,41 @@ class ProgressTracker {
     );
   }
 
-  checkAndStartNewInterval() {
+  handlePlayStart() {
     const currentTime = this.video.currentTime;
-    if (
-      !this.currentInterval &&
-      !this.isTimeWatched(currentTime) &&
-      !this.isSeeking &&
-      !this.video.paused
-    ) {
+    if (!this.isTimeWatched(currentTime)) {
       this.startNewInterval(currentTime);
+      this.lastValidTime = currentTime;
     }
   }
 
+  handleSeeked() {
+    const currentTime = this.video.currentTime;
+    if (!this.video.paused && !this.isTimeWatched(currentTime)) {
+      this.startNewInterval(currentTime);
+      this.lastValidTime = currentTime;
+    }
+  }
+
+  handleTimeUpdate() {
+    const currentTime = this.video.currentTime;
+    const delta = currentTime - this.lastValidTime;
+
+    // Only count smooth forward playback (not jumps)
+    if (!this.isSeeking && delta > 0 && delta < 1.0) {
+      if (this.currentInterval) {
+        this.currentInterval.end = currentTime;
+      } else if (!this.isTimeWatched(currentTime)) {
+        this.startNewInterval(currentTime);
+      }
+      this.lastValidTime = currentTime;
+    }
+
+    this.lastPosition = currentTime;
+  }
+
   startNewInterval(startTime) {
+    if (this.isTimeWatched(startTime)) return;
     this.currentInterval = {
       start: startTime,
       end: startTime,
@@ -129,71 +133,69 @@ class ProgressTracker {
   }
 
   finalizeCurrentInterval() {
-    if (this.currentInterval) {
-      this.currentInterval.end = this.video.currentTime;
+    if (!this.currentInterval) return;
 
-      // Only add if interval is meaningful (≥0.5 seconds) and not in watched portion
-      if (
-        this.currentInterval.end - this.currentInterval.start >= 0.5 &&
-        !this.isTimeWatched(this.currentInterval.start)
-      ) {
-        this.addWatchedInterval(
-          this.currentInterval.start,
-          this.currentInterval.end
-        );
-      }
-
-      this.currentInterval = null;
+    const duration = this.currentInterval.end - this.currentInterval.start;
+    if (duration >= this.minIntervalDuration) {
+      this.addWatchedInterval(
+        this.currentInterval.start,
+        this.currentInterval.end
+      );
     }
-  }
 
-  startUIUpdates() {
-    this.stopUIUpdates();
-    this.uiUpdateInterval = setInterval(() => this.updateUI(), 100);
-  }
-
-  stopUIUpdates() {
-    clearInterval(this.uiUpdateInterval);
-    this.uiUpdateInterval = null;
+    this.currentInterval = null;
   }
 
   addWatchedInterval(start, end) {
     if (start >= end) return;
+    this.watchedIntervals = this.mergeIntervals([
+      ...this.watchedIntervals,
+      [start, end],
+    ]);
+  }
 
-    const newInterval = [start, end];
-    let intervals = [...this.watchedIntervals, newInterval];
+  mergeIntervals(intervals) {
+    if (intervals.length === 0) return [];
 
     intervals.sort((a, b) => a[0] - b[0]);
-    const merged = [];
+    const merged = [intervals[0]];
 
-    for (const interval of intervals) {
-      if (!merged.length) {
-        merged.push([...interval]);
+    for (let i = 1; i < intervals.length; i++) {
+      const last = merged[merged.length - 1];
+      const current = intervals[i];
+
+      if (current[0] <= last[1]) {
+        last[1] = Math.max(last[1], current[1]);
       } else {
-        const last = merged[merged.length - 1];
-        if (interval[0] <= last[1]) {
-          last[1] = Math.max(last[1], interval[1]);
-        } else {
-          merged.push([...interval]);
-        }
+        merged.push(current);
       }
     }
 
-    this.watchedIntervals = merged;
+    return merged;
+  }
+
+  startUIUpdates() {
+    this.stopUIUpdates();
+    this.uiUpdateInterval = setInterval(() => {
+      this.updateUI();
+    }, 100);
+  }
+
+  stopUIUpdates() {
+    if (this.uiUpdateInterval) {
+      clearInterval(this.uiUpdateInterval);
+      this.uiUpdateInterval = null;
+    }
   }
 
   getTotalWatchedTime() {
     let total = this.watchedIntervals.reduce(
-      (sum, [start, end]) => sum + (end - start),
+      (total, [start, end]) => total + (end - start),
       0
     );
 
-    // Add current interval if it's valid new content
-    if (
-      this.currentInterval &&
-      !this.isTimeWatched(this.currentInterval.start) &&
-      this.currentInterval.end - this.currentInterval.start >= 0
-    ) {
+    // Include current interval if valid
+    if (this.currentInterval && !this.isSeeking) {
       total += this.currentInterval.end - this.currentInterval.start;
     }
 
@@ -224,6 +226,7 @@ class ProgressTracker {
     this.watchedIntervals = [];
     this.currentInterval = null;
     this.video.currentTime = 0;
+    this.lastValidTime = 0;
     this.updateUI();
     this.saveProgress();
   }
