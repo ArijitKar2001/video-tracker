@@ -5,7 +5,9 @@ class ProgressTracker {
     this.watchedIntervals = [];
     this.currentInterval = null;
     this.videoDuration = 0;
-    this.seekStartTime = 0;
+    this.lastUpdateTime = 0;
+    this.uiUpdateInterval = null;
+    this.isSeeking = false;
 
     this.loadProgress();
     this.setupEventListeners();
@@ -15,10 +17,10 @@ class ProgressTracker {
     const savedData = localStorage.getItem(this.storageKey);
     if (savedData) {
       const { intervals, duration, currentTime } = JSON.parse(savedData);
-      this.watchedIntervals = intervals;
-      this.videoDuration = duration;
+      this.watchedIntervals = intervals || [];
+      this.videoDuration = duration || 0;
       this.video.currentTime = currentTime || 0;
-      this.updateProgressDisplay();
+      this.updateUI();
     }
 
     if (!this.videoDuration && this.video.duration) {
@@ -38,33 +40,56 @@ class ProgressTracker {
   setupEventListeners() {
     this.video.addEventListener("loadedmetadata", () => {
       this.videoDuration = this.video.duration;
-      this.updateProgressDisplay();
+      this.updateUI();
     });
 
     this.video.addEventListener("play", () => {
-      this.startNewInterval();
+      // Only start new interval if not in already watched portion
+      if (!this.isInWatchedPortion(this.video.currentTime)) {
+        this.startNewInterval();
+      }
+      this.startUIUpdates();
     });
 
     this.video.addEventListener("pause", () => {
       this.endCurrentInterval();
+      this.stopUIUpdates();
       this.saveProgress();
     });
 
     this.video.addEventListener("seeking", () => {
-      this.seekStartTime = this.video.currentTime;
+      this.isSeeking = true;
       this.endCurrentInterval();
+      this.stopUIUpdates();
     });
 
     this.video.addEventListener("seeked", () => {
-      this.startNewInterval();
+      this.isSeeking = false;
+      // Only start new interval if not in already watched portion
+      if (
+        !this.video.paused &&
+        !this.isInWatchedPortion(this.video.currentTime)
+      ) {
+        this.startNewInterval();
+      }
+      if (!this.video.paused) {
+        this.startUIUpdates();
+      }
     });
 
     this.video.addEventListener("timeupdate", () => {
-      this.updateProgressDisplay();
+      // If we enter watched portion during playback, end current interval
+      if (
+        this.currentInterval &&
+        this.isInWatchedPortion(this.video.currentTime)
+      ) {
+        this.endCurrentInterval();
+      }
     });
 
     this.video.addEventListener("ended", () => {
       this.endCurrentInterval();
+      this.stopUIUpdates();
       this.saveProgress();
     });
 
@@ -73,8 +98,29 @@ class ProgressTracker {
     });
   }
 
+  isInWatchedPortion(time) {
+    return this.watchedIntervals.some(
+      ([start, end]) => time >= start && time <= end
+    );
+  }
+
+  startUIUpdates() {
+    this.stopUIUpdates();
+    this.uiUpdateInterval = setInterval(() => this.updateUI(), 100);
+  }
+
+  stopUIUpdates() {
+    if (this.uiUpdateInterval) {
+      clearInterval(this.uiUpdateInterval);
+      this.uiUpdateInterval = null;
+    }
+  }
+
   startNewInterval() {
-    if (!this.currentInterval) {
+    if (
+      !this.currentInterval &&
+      !this.isInWatchedPortion(this.video.currentTime)
+    ) {
       this.currentInterval = {
         start: this.video.currentTime,
         end: this.video.currentTime,
@@ -104,8 +150,8 @@ class ProgressTracker {
     let intervals = [...this.watchedIntervals, newInterval];
 
     intervals.sort((a, b) => a[0] - b[0]);
-
     const merged = [];
+
     for (const interval of intervals) {
       if (!merged.length) {
         merged.push([...interval]);
@@ -120,35 +166,45 @@ class ProgressTracker {
     }
 
     this.watchedIntervals = merged;
-    this.updateProgressDisplay();
   }
 
-  calculateWatchedTime() {
-    return this.watchedIntervals.reduce(
-      (total, [start, end]) => total + (end - start),
+  getTotalWatchedTime() {
+    let total = this.watchedIntervals.reduce(
+      (sum, [start, end]) => sum + (end - start),
       0
     );
+
+    // Add current playback time if watching new content
+    if (this.currentInterval && !this.video.paused && !this.isSeeking) {
+      total += this.video.currentTime - this.currentInterval.start;
+    }
+
+    return total;
   }
 
   calculateProgress() {
     if (!this.videoDuration) return 0;
-    const watched = this.calculateWatchedTime();
+    const watched = this.getTotalWatchedTime();
     return Math.min(100, (watched / this.videoDuration) * 100);
   }
 
-  updateProgressDisplay() {
+  updateUI() {
     const progress = this.calculateProgress();
-    document.getElementById("progressFill").style.width = `${progress}%`;
-    document.getElementById("progressText").textContent = `${progress.toFixed(
-      1
-    )}%`;
+    const progressFill = document.getElementById("progressFill");
+    const progressText = document.getElementById("progressText");
+
+    progressFill.style.width = `${progress}%`;
+    progressText.textContent = `${progress.toFixed(1)}%`;
+
+    progressFill.style.transition =
+      this.video.paused || this.isSeeking ? "none" : "width 0.2s ease";
   }
 
   resetProgress() {
     this.watchedIntervals = [];
     this.currentInterval = null;
     this.video.currentTime = 0;
-    this.updateProgressDisplay();
+    this.updateUI();
     this.saveProgress();
   }
 }
